@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"slices"
-	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+const (
+	database = "mini-dns"
 )
 
 type Subdomain struct {
@@ -24,36 +26,55 @@ type Record struct {
 	Subdomains []Subdomain        `bson:"subdomains"`
 }
 
-type DB struct {
-	Client *mongo.Client
+type Client struct {
+	DB *mongo.Database
 }
 
-func (db DB) insert(url []string, IP string) {
-	//	coll := db.Client.Database("db").Collection(url[0])
+func NewSubDomain(domain, ip string) Subdomain {
+	return Subdomain{
+		Domain: domain,
+		IP:     ip,
+	}
+}
+
+func (client Client) Update(url []string, IP string) {
 
 }
 
-func parser(url string) (s []string) {
-	s = strings.Split(url, ".")
-	sub := len(s) - 2
-
-	str := strings.Join(s[:sub], ".")
-	s = slices.Delete(s, 0, sub)
-
-	slices.Reverse(s)
-	s = append(s, str)
-	//s = slices.Delete(s, 0, 1)
-	return
-}
-
-func (db *DB) Find(URI string) {
+func (client *Client) Insert(URI string, IP string) {
 	url := parser(URI)
-	coll := db.Client.Database("mini-dns").Collection(url[0])
 
-	projection := bson.D{{Key: "subdomains.ip.$", Value: 1}, {Key: "_id", Value: 0}, {Key: "subdomain.ip", Value: 1}}
+	coll := client.DB.Collection(url[0])
+	r := Record{
+		Sld: url[1],
+		Subdomains: []Subdomain{
+			NewSubDomain(url[2], IP),
+		},
+	}
+
+	result, err := coll.InsertOne(context.TODO(), r)
+	if err != nil {
+		log.Println("failed to insert record:", err)
+	}
+	fmt.Println(result)
+}
+
+func (client Client) Find(URI string) {
+	url := parser(URI)
+	coll := client.DB.Collection(url[0])
+
+	projection := bson.D{{Key: "subdomains.$", Value: 1}, {Key: "_id", Value: 0}, {Key: "subdomain.ip", Value: 1}}
 	opts := options.Find().SetProjection(projection)
 
-	query := bson.D{{Key: "subdomains.domain", Value: "dns"}}
+	var value string
+	if len(url) < 3 {
+		value = ""
+	} else {
+		value = url[2]
+	}
+
+	fmt.Println(url)
+	query := bson.D{{Key: "subdomains.domain", Value: value}}
 	curser, err := coll.Find(context.TODO(), query, opts)
 	if err != nil {
 		fmt.Println(err)
@@ -65,17 +86,21 @@ func (db *DB) Find(URI string) {
 		fmt.Println(err)
 		return
 	}
+	if len(results) == 0 {
+		fmt.Println("no matches")
+		return
+	}
 	fmt.Println(results[0].Subdomains[0].IP)
 
 }
 
-func NewDB(mongoURI string) DB {
+func NewDB(mongoURI string) Client {
 	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Panic(err)
 	}
-	return DB{
-		Client: client,
+	return Client{
+		DB: client.Database(database),
 	}
 
 }
