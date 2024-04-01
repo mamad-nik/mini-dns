@@ -1,33 +1,20 @@
 package server
 
 import (
-	"net"
+	"net/http"
+
+	"github.com/gorilla/mux"
 )
 
-const (
-	port   = "53535"
-	hostIP = "127.0.0.1"
-)
+func Serve() {
+	r := mux.NewRouter()
 
-func Serve() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", hostIP+":"+port)
-	if err != nil {
-		return err
+	r.HandleFunc("/dns", input)
+
+	server := http.Server{
+		Addr:    ":3535",
+		Handler: r,
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return err
-	}
-
-	for {
-		var buf [512]byte
-		_, addr, err := conn.ReadFromUDP(buf[:])
-		if err != nil {
-			return err
-		}
-		go handlePacket(conn, addr, buf)
-	}
-
-	//return nil
+	server.ListenAndServe()
 }
