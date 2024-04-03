@@ -2,9 +2,13 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 
+	minidns "github.com/mamad-nik/mini-dns"
+	"github.com/mamad-nik/mini-dns/agent"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -13,85 +17,101 @@ import (
 
 const (
 	database = "mini-dns"
+	set      = "$set"
+	sld      = "sld"
 )
 
-type Subdomain struct {
-	Domain string `bson:"domain"`
-	IP     string `bson:"ip"`
-}
-
 type Record struct {
-	ID         primitive.ObjectID `bson:"_id,omitempty"`
-	Sld        string             `bson:"sld"`
-	Subdomains []Subdomain        `bson:"subdomains"`
+	ID  primitive.ObjectID `bson:"_id,omitempty"`
+	Sld string             `bson:"sld"`
 }
 
 type Client struct {
 	DB *mongo.Database
 }
 
-func NewSubDomain(domain, ip string) Subdomain {
-	return Subdomain{
-		Domain: domain,
-		IP:     ip,
-	}
-}
-
-func (client Client) Update(url []string, IP string) {
-
-}
-
-func (client *Client) Insert(URI string, IP string) {
-	url := parser(URI)
-
+func (client Client) Exists(url []string) (bool, error) {
 	coll := client.DB.Collection(url[0])
-	r := Record{
-		Sld: url[1],
-		Subdomains: []Subdomain{
-			NewSubDomain(url[2], IP),
-		},
-	}
 
-	result, err := coll.InsertOne(context.TODO(), r)
+	filter := bson.D{{Key: sld, Value: url[1]}}
+	result := coll.FindOne(context.TODO(), filter)
+
+	var m bson.M
+	if err := result.Decode(&m); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return false, nil
+		}
+		return false, err
+	}
+	fmt.Println(m)
+	return true, nil
+
+}
+
+func (client *Client) Update(url []string, IP string) {
+	coll := client.DB.Collection(url[0])
+
+	filter := bson.D{{Key: sld, Value: url[1]}}
+	update := bson.D{{Key: set, Value: bson.D{{Key: url[2], Value: IP}}}}
+
+	result, err := coll.UpdateOne(context.TODO(), filter, update)
 	if err != nil {
-		log.Println("failed to insert record:", err)
+		fmt.Println(err)
+		return
 	}
 	fmt.Println(result)
 }
 
-func (client Client) Find(URI string) {
+func (client *Client) Insert(url []string, IP string) error {
+	coll := client.DB.Collection(url[0])
+	r := Record{
+		Sld: url[1],
+	}
+
+	_, err := coll.InsertOne(context.TODO(), r)
+	if err != nil {
+		return err
+	}
+	client.Update(url, IP)
+	return nil
+}
+
+func (client *Client) Find(URI string) (string, error) {
 	url := parser(URI)
 	coll := client.DB.Collection(url[0])
 
-	projection := bson.D{{Key: "subdomains.$", Value: 1}, {Key: "_id", Value: 0}, {Key: "subdomain.ip", Value: 1}}
-	opts := options.Find().SetProjection(projection)
+	query := bson.D{{Key: sld, Value: url[1]}}
+	curser := coll.FindOne(context.TODO(), query)
 
-	var value string
-	if len(url) < 3 {
-		value = ""
+	var results bson.M
+	if err := curser.Decode(&results); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return "", errors.New("Find: No SLD")
+		}
+		return "", err
+	}
+	s, ok := results[url[2]]
+	if !ok {
+		return "", errors.New("Find: No Record")
+	}
+	return s.(string), nil
+}
+
+func (client *Client) Upsert(URI string, IP string, ok bool) error {
+	url := parser(URI)
+	/*
+		ok, err := client.Exists(url)
+
+		if err != nil {
+			return err
+		}
+	*/
+	if ok {
+		client.Update(url, IP)
 	} else {
-		value = url[2]
+		client.Insert(url, IP)
 	}
-
-	fmt.Println(url)
-	query := bson.D{{Key: "subdomains.domain", Value: value}}
-	curser, err := coll.Find(context.TODO(), query, opts)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	var results []Record
-	if err = curser.All(context.TODO(), &results); err != nil {
-		fmt.Println(err)
-		return
-	}
-	if len(results) == 0 {
-		fmt.Println("no matches")
-		return
-	}
-	fmt.Println(results[0].Subdomains[0].IP)
-
+	return nil
 }
 
 func NewDB(mongoURI string) Client {
@@ -102,5 +122,34 @@ func NewDB(mongoURI string) Client {
 	return Client{
 		DB: client.Database(database),
 	}
+}
+func (client *Client) assistance(ch minidns.Dn) {
+	res, err := client.Find(ch.Domain)
+	if err != nil {
+		var exists bool
+		if err.Error() == "Find: No SLD" {
+			exists = true
+		} else if err.Error() == "Find: No Record" {
+			exists = false
+		}
+		newIP, err := agent.LookUp(ch.Domain)
+		if err != nil {
+			if dnserr, ok := err.(*net.DNSError); ok && dnserr.IsNotFound {
+				ch.Err <- errors.New("no such host")
+			} else if ok && dnserr.IsTimeout {
+				ch.Err <- errors.New("timeout try again please")
+			}
+		} else {
+			res = newIP
+			client.Upsert(ch.Domain, newIP, exists)
+		}
+	}
+	ch.IP <- res
+}
+func Manager(mongoURI string, ip <-chan minidns.Dn) {
+	client := NewDB(mongoURI)
 
+	for ch := range ip {
+		go client.assistance(ch)
+	}
 }

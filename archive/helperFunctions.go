@@ -15,5 +15,8 @@ func parser(url string) (s []string) {
 	slices.Reverse(s)
 	s = append(s, str)
 
+	if s[2] == "" {
+		s[2] = "-val"
+	}
 	return
 }
