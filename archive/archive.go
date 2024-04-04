@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	minidns "github.com/mamad-nik/mini-dns"
 	"github.com/mamad-nik/mini-dns/agent"
@@ -54,12 +55,11 @@ func (client *Client) Update(url []string, IP string) {
 	filter := bson.D{{Key: sld, Value: url[1]}}
 	update := bson.D{{Key: set, Value: bson.D{{Key: url[2], Value: IP}}}}
 
-	result, err := coll.UpdateOne(context.TODO(), filter, update)
+	_, err := coll.UpdateOne(context.TODO(), filter, update)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(result)
 }
 
 func (client *Client) Insert(url []string, IP string) error {
@@ -99,13 +99,7 @@ func (client *Client) Find(URI string) (string, error) {
 
 func (client *Client) Upsert(URI string, IP string, ok bool) error {
 	url := parser(URI)
-	/*
-		ok, err := client.Exists(url)
 
-		if err != nil {
-			return err
-		}
-	*/
 	if ok {
 		client.Update(url, IP)
 	} else {
@@ -123,14 +117,14 @@ func NewDB(mongoURI string) Client {
 		DB: client.Database(database),
 	}
 }
-func (client *Client) assistance(ch minidns.Dn) {
+func (client *Client) assistance(ch minidns.Request) {
 	res, err := client.Find(ch.Domain)
 	if err != nil {
 		var exists bool
 		if err.Error() == "Find: No SLD" {
-			exists = true
-		} else if err.Error() == "Find: No Record" {
 			exists = false
+		} else if err.Error() == "Find: No Record" {
+			exists = true
 		}
 		newIP, err := agent.LookUp(ch.Domain)
 		if err != nil {
@@ -146,10 +140,17 @@ func (client *Client) assistance(ch minidns.Dn) {
 	}
 	ch.IP <- res
 }
-func Manager(mongoURI string, ip <-chan minidns.Dn) {
+func Manage(mongoURI string, ip <-chan minidns.Request) {
 	client := NewDB(mongoURI)
+	updateTimer := time.NewTicker(time.Minute)
+	defer updateTimer.Stop()
 
-	for ch := range ip {
-		go client.assistance(ch)
+	for {
+		select {
+		case ch := <-ip:
+			go client.assistance(ch)
+		case <-updateTimer.C:
+			client.Restore()
+		}
 	}
 }
