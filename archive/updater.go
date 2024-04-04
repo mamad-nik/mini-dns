@@ -18,7 +18,7 @@ func (c *Client) Restore() {
 		fmt.Println(err)
 		return
 	}
-	log.Println("Update started", err)
+	log.Println("Update: started")
 
 	opts := options.Find().SetProjection(bson.D{{Key: "_id", Value: false}})
 
@@ -44,12 +44,12 @@ func (c *Client) Restore() {
 						uri = i + "." + sld + "." + v
 					}
 
-					ip, err := agent.LookUp(i + "." + sld + "." + v)
+					ip, err := agent.LookUp(uri)
 					if err != nil {
 						log.Println("Update: LookUp: ", err)
 						continue
 					}
-					fmt.Printf("%s -> %s\n", uri, ip)
+					log.Printf("Update: %s -> %s\n", uri, ip)
 					c.Update(parser(uri), ip)
 				}
 			}
