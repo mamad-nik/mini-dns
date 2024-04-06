@@ -56,5 +56,5 @@ func (c *Client) Restore() {
 
 		}
 	}
-
+	log.Println("Update: done")
 }

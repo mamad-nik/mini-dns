@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -30,6 +32,15 @@ func add(domain, ip string) {
 }
 
 func handle(req minidns.Request, archInp chan<- minidns.Request) {
+	fmt.Println(cache.data)
+	if v, ok := cache.data[req.Domain]; ok {
+		cache.mu.Lock()
+		req.IP <- v.value
+		cache.mu.Unlock()
+		log.Println("Cache: no need to bother archive")
+		return
+	}
+
 	ch := make(chan string)
 	errch := make(chan error)
 
@@ -49,16 +60,21 @@ func handle(req minidns.Request, archInp chan<- minidns.Request) {
 }
 
 func reset() {
+
 	for _, v := range cache.data {
 		go func(m entry) {
 			<-m.ticker.C
+			cache.mu.Lock()
 			m.ticker.Stop()
 			delete(cache.data, m.value)
+			cache.mu.Unlock()
 		}(v)
 	}
 }
 
 func Run(input <-chan minidns.Request, archInp chan<- minidns.Request) {
+	cache.data = make(map[string]entry)
+	go reset()
 	for newReq := range input {
 		go handle(newReq, archInp)
 	}

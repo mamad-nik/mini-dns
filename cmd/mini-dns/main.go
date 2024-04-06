@@ -1,7 +1,10 @@
 package main
 
 import (
+	minidns "github.com/mamad-nik/mini-dns"
 	"github.com/mamad-nik/mini-dns/archive"
+	"github.com/mamad-nik/mini-dns/cache"
+	"github.com/mamad-nik/mini-dns/server"
 )
 
 const (
@@ -11,27 +14,9 @@ const (
 )
 
 func main() {
-	/*
-		ch := make(chan minidns.Request)
-		go archive.Manage(, ch)
-		res := make(chan string)
-		err := make(chan error)
-
-		ch <- minidns.Request{
-			Domain: "www.jadi.net",
-			IP:     res,
-			Err:    err,
-		}
-
-		select {
-		case e := <-err:
-			fmt.Println(e)
-			return
-		case ip := <-res:
-			fmt.Println(ip)
-			return
-		}
-	*/
-	db := archive.NewDB(mongoURI)
-	db.Restore()
+	arch := make(chan minidns.Request)
+	ca := make(chan minidns.Request)
+	go archive.Manage(mongoURI, arch)
+	go cache.Run(ca, arch)
+	server.Serve(ca)
 }
