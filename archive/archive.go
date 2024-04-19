@@ -80,17 +80,26 @@ func (client *Client) Find(URI string) (string, error) {
 	url := parser(URI)
 	coll := client.DB.Collection(url[0])
 
-	query := bson.D{{Key: sld, Value: url[1]}}
-	curser := coll.FindOne(context.TODO(), query)
+	matchStage := bson.D{{Key: "$match", Value: bson.D{{Key: "sld", Value: url[1]}}}}
+	unsetStage := bson.D{{Key: "$unset", Value: bson.A{"_id"}}}
+	limitStage := bson.D{{Key: "$limit", Value: 1}}
 
-	var results bson.M
-	if err := curser.Decode(&results); err != nil {
+	pipeline := mongo.Pipeline{matchStage, unsetStage, limitStage}
+	cursor, err := coll.Aggregate(context.TODO(), pipeline)
+	if err != nil {
+		return "", err
+	}
+
+	var results []bson.M
+	err = cursor.All(context.TODO(), &results)
+	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return "", errors.New("Find: No SLD")
 		}
 		return "", err
 	}
-	s, ok := results[url[2]]
+
+	s, ok := results[0][url[2]]
 	if !ok {
 		return "", errors.New("Find: No Record")
 	}
