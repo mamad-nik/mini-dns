@@ -131,7 +131,7 @@ func (client *Client) assistance(ch minidns.Request) {
 			if dnserr, ok := err.(*net.DNSError); ok && dnserr.IsNotFound {
 				ch.Err <- errors.New("no such host")
 			} else if ok && dnserr.IsTimeout {
-				ch.Err <- errors.New("timeout try again please")
+				ch.Err <- errors.New("timeout, try again please")
 			}
 		} else {
 			res = newIP
