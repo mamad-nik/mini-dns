@@ -23,8 +23,9 @@ const (
 )
 
 type Record struct {
-	ID  primitive.ObjectID `bson:"_id,omitempty"`
-	Sld string             `bson:"sld"`
+	ID           primitive.ObjectID `bson:"_id,omitempty"`
+	Sld          string             `bson:"sld"`
+	LastModified time.Time          `bson:"lastmodified"`
 }
 
 type Client struct {
@@ -49,11 +50,11 @@ func (client Client) Exists(url []string) (bool, error) {
 
 }
 
-func (client *Client) Update(url []string, IP string) {
+func (client *Client) AddFields(url []string, IP string) {
 	coll := client.DB.Collection(url[0])
 
 	filter := bson.D{{Key: sld, Value: url[1]}}
-	update := bson.D{{Key: set, Value: bson.D{{Key: url[2], Value: IP}}}}
+	update := bson.D{{Key: set, Value: bson.D{{Key: url[2], Value: IP}, {Key: "lastmodified", Value: time.Now()}}}}
 
 	_, err := coll.UpdateOne(context.TODO(), filter, update)
 	if err != nil {
@@ -65,14 +66,15 @@ func (client *Client) Update(url []string, IP string) {
 func (client *Client) Insert(url []string, IP string) error {
 	coll := client.DB.Collection(url[0])
 	r := Record{
-		Sld: url[1],
+		Sld:          url[1],
+		LastModified: time.Now(),
 	}
 
 	_, err := coll.InsertOne(context.TODO(), r)
 	if err != nil {
 		return err
 	}
-	client.Update(url, IP)
+	client.AddFields(url, IP)
 	return nil
 }
 
@@ -98,26 +100,34 @@ func (client *Client) Find(URI string) (string, error) {
 		}
 		return "", err
 	}
+	if len(results) == 0 {
+		return "", errors.New("Find: No SLD")
 
+	}
+	r := results[0]["lastmodified"].(primitive.DateTime)
+	if r.Time().Compare(time.Now().Add(-1*time.Minute)) < 0 {
+		log.Println("Old data")
+		return "", errors.New("Find: No Record or Old")
+	}
 	s, ok := results[0][url[2]]
 	if !ok {
-		return "", errors.New("Find: No Record")
+		return "", errors.New("Find: No Record or Old")
 	}
+
 	return s.(string), nil
 }
 
 func (client *Client) Upsert(URI string, IP string, ok bool) error {
 	url := parser(URI)
-
 	if ok {
-		client.Update(url, IP)
+		client.AddFields(url, IP)
 	} else {
 		client.Insert(url, IP)
 	}
 	return nil
 }
 
-func NewDB(mongoURI string) Client {
+func NewClient(mongoURI string) Client {
 	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Panic(err)
@@ -132,7 +142,7 @@ func (client *Client) assistance(ch minidns.Request) {
 		var exists bool
 		if err.Error() == "Find: No SLD" {
 			exists = false
-		} else if err.Error() == "Find: No Record" {
+		} else if err.Error() == "Find: No Record or Old" {
 			exists = true
 		}
 		newIP, err := agent.LookUp(ch.Domain)
@@ -150,8 +160,8 @@ func (client *Client) assistance(ch minidns.Request) {
 	ch.IP <- res
 }
 func Manage(mongoURI string, ip <-chan minidns.Request) {
-	client := NewDB(mongoURI)
-	updateTimer := time.NewTicker(time.Minute)
+	client := NewClient(mongoURI)
+	updateTimer := time.NewTicker(time.Minute * 5)
 	defer updateTimer.Stop()
 
 	for {
@@ -159,7 +169,7 @@ func Manage(mongoURI string, ip <-chan minidns.Request) {
 		case ch := <-ip:
 			go client.assistance(ch)
 		case <-updateTimer.C:
-			client.Restore()
+			client.Update()
 		}
 	}
 }

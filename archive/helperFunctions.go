@@ -3,6 +3,7 @@ package archive
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 func parser(url string) (s []string) {
@@ -19,4 +20,15 @@ func parser(url string) (s []string) {
 		s[2] = "-val"
 	}
 	return
+}
+
+func reconstruct(tld, sld, sub string) string {
+	if sub == "-val" {
+		sub = ""
+	}
+	return sub + "." + sld + "." + tld
+}
+
+func timeStamp() string {
+	return time.Now().Format(time.Layout)
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"time"
 
 	minidns "github.com/mamad-nik/mini-dns"
 	"github.com/mamad-nik/mini-dns/archive"
@@ -30,7 +30,7 @@ func defaultRun() {
 }
 
 func main() {
-	cf := flag.Bool("cache", false, "should i use cache?")
+	/*cf := flag.Bool("cache", false, "should i use cache?")
 	flag.Parse()
 
 	if *cf {
@@ -38,4 +38,8 @@ func main() {
 	} else {
 		defaultRun()
 	}
+	*/
+	a := archive.NewClient(mongoURI)
+	a.Update()
+	time.Sleep(10 * time.Second)
 }

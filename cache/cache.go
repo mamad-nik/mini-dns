@@ -74,8 +74,15 @@ func reset() {
 
 func Run(input <-chan minidns.Request, archInp chan<- minidns.Request) {
 	cache.data = make(map[string]entry)
-	go reset()
-	for newReq := range input {
-		go handle(newReq, archInp)
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+
+	for {
+		select {
+		case newReq := <-input:
+			go handle(newReq, archInp)
+		case <-t.C:
+			go reset()
+		}
 	}
 }
