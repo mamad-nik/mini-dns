@@ -60,8 +60,11 @@ func (c *Client) Update() {
 						url := reconstruct(co, v, k)
 						ip, err := lookUp(url)
 						if err == nil {
-							c.AddFields(parser(url), ip)
-							log.Println(url, " -> ", ip)
+							u, err := parser(url)
+							if err == nil {
+								c.AddFields(u, ip)
+								log.Println(url, " -> ", ip)
+							}
 						}
 					}
 				}

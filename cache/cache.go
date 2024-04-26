@@ -33,9 +33,9 @@ func add(domain, ip string) {
 
 func handle(req minidns.Request, archInp chan<- minidns.Request) {
 	fmt.Println(cache.data)
-	if v, ok := cache.data[req.Domain]; ok {
+	if v, ok := cache.data[req.Requset]; ok {
 		cache.mu.Lock()
-		req.IP <- v.value
+		req.Response <- v.value
 		cache.mu.Unlock()
 		log.Println("Cache: no need to bother archive")
 		return
@@ -45,15 +45,15 @@ func handle(req minidns.Request, archInp chan<- minidns.Request) {
 	errch := make(chan error)
 
 	archInp <- minidns.Request{
-		Domain: req.Domain,
-		IP:     ch,
-		Err:    errch,
+		Requset:  req.Requset,
+		Response: ch,
+		Err:      errch,
 	}
 
 	select {
 	case ip := <-ch:
-		req.IP <- ip
-		add(req.Domain, ip)
+		req.Response <- ip
+		add(req.Requset, ip)
 	case err := <-errch:
 		req.Err <- err
 	}

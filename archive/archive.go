@@ -32,22 +32,30 @@ type Client struct {
 	DB *mongo.Database
 }
 
-func (client Client) Exists(url []string) (bool, error) {
+func (client *Client) Subdomains(url []string) (map[string]string, error) {
 	coll := client.DB.Collection(url[0])
 
-	filter := bson.D{{Key: sld, Value: url[1]}}
-	result := coll.FindOne(context.TODO(), filter)
+	matchStage := bson.D{{Key: "$match", Value: bson.D{{Key: "sld", Value: url[1]}}}}
+	unsetStage := bson.D{{Key: "$unset", Value: bson.A{"_id", "lastmodified"}}}
 
-	var m bson.M
-	if err := result.Decode(&m); err != nil {
-		if err == mongo.ErrNoDocuments {
-			return false, nil
-		}
-		return false, err
+	cursor, err := coll.Aggregate(context.TODO(), mongo.Pipeline{matchStage, unsetStage})
+	if err != nil {
+		return nil, err
 	}
-	fmt.Println(m)
-	return true, nil
+	var results []bson.M
+	if err = cursor.All(context.TODO(), &results); err != nil {
+		return nil, err
+	}
+	res := make(map[string]string)
 
+	for k, v := range results[0] {
+		if k != sld {
+
+			res[reconstruct(url[0], url[1], k)] = v.(string)
+		}
+	}
+
+	return res, nil
 }
 
 func (client *Client) AddFields(url []string, IP string) {
@@ -79,7 +87,11 @@ func (client *Client) Insert(url []string, IP string) error {
 }
 
 func (client *Client) Find(URI string) (string, error) {
-	url := parser(URI)
+	url, err := parser(URI)
+	if err != nil {
+		return "", err
+	}
+
 	coll := client.DB.Collection(url[0])
 
 	matchStage := bson.D{{Key: "$match", Value: bson.D{{Key: "sld", Value: url[1]}}}}
@@ -118,7 +130,10 @@ func (client *Client) Find(URI string) (string, error) {
 }
 
 func (client *Client) Upsert(URI string, IP string, ok bool) error {
-	url := parser(URI)
+	url, err := parser(URI)
+	if err != nil {
+		return err
+	}
 	if ok {
 		client.AddFields(url, IP)
 	} else {
@@ -136,37 +151,156 @@ func NewClient(mongoURI string) Client {
 		DB: client.Database(database),
 	}
 }
-func (client *Client) assistance(ch minidns.Request) {
-	res, err := client.Find(ch.Domain)
+
+func (client *Client) Meta() int32 {
+	colls, err := client.DB.ListCollectionNames(context.TODO(), bson.D{})
 	if err != nil {
-		var exists bool
-		if err.Error() == "Find: No SLD" {
-			exists = false
-		} else if err.Error() == "Find: No Record or Old" {
-			exists = true
-		}
-		newIP, err := agent.LookUp(ch.Domain)
+		fmt.Println(err)
+		return 0
+	}
+	projectStage := bson.D{{Key: "$project", Value: bson.D{{Key: "fields", Value: bson.D{{Key: "$objectToArray", Value: "$$ROOT"}}}}}}
+	unwindStage := bson.D{{Key: "$unwind", Value: "$fields"}}
+	groupStage := bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "fields", Value: bson.D{{Key: "$addToSet", Value: "$fields.k"}}}}}}
+	projectCountStage := bson.D{{Key: "$project", Value: bson.D{{Key: "_id", Value: 0}, {Key: "count", Value: bson.D{{Key: "$size", Value: "$fields"}}}}}}
+
+	// Aggregate pipeline
+	pipeline := mongo.Pipeline{projectStage, unwindStage, groupStage, projectCountStage}
+
+	for _, c := range colls {
+		cursor, err := client.DB.Collection(c).Aggregate(context.TODO(), pipeline)
 		if err != nil {
-			if dnserr, ok := err.(*net.DNSError); ok && dnserr.IsNotFound {
-				ch.Err <- errors.New("no such host")
-			} else if ok && dnserr.IsTimeout {
-				ch.Err <- errors.New("timeout, try again please")
-			}
-		} else {
-			res = newIP
-			client.Upsert(ch.Domain, newIP, exists)
+			log.Println(err)
+			return 0
+		}
+		var results []bson.M
+		if err = cursor.All(context.TODO(), &results); err != nil {
+			log.Println(err)
+			return 0
+		}
+		if len(results) > 0 {
+			return results[0]["count"].(int32)
+
 		}
 	}
-	ch.IP <- res
+	return 0
 }
-func Manage(mongoURI string, ip <-chan minidns.Request) {
+
+func (client *Client) assistance(ch minidns.Request) {
+
+	if ch.ReqType == "ip" {
+		res, err := client.Find(ch.Requset)
+		if err != nil {
+			if err.Error() == "invalid url" {
+				ch.Err <- err
+			}
+			var exists bool
+			if err.Error() == "Find: No SLD" {
+				exists = false
+			} else if err.Error() == "Find: No Record or Old" {
+				exists = true
+			}
+			newIP, err := agent.LookUp(ch.Requset)
+			if err != nil {
+				if dnserr, ok := err.(*net.DNSError); ok && dnserr.IsNotFound {
+					ch.Err <- errors.New("no such host")
+				} else if ok && dnserr.IsTimeout {
+					ch.Err <- errors.New("timeout, try again please")
+				}
+			} else {
+				res = newIP
+				client.Upsert(ch.Requset, newIP, exists)
+			}
+		}
+		fmt.Println(res)
+		ch.Response <- res
+	} else if ch.ReqType == "domain" {
+		res, err := client.SearchByIP(ch.Requset)
+		if err != nil {
+			ch.Err <- err
+			return
+		}
+		log.Println("ip", res)
+		ch.Response <- res
+	}
+
+}
+
+func (c *Client) returnAll() (map[string]string, error) {
+	colls, err := c.DB.ListCollectionNames(context.TODO(), bson.D{})
+	log.Println(colls)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	m := make(map[string]string)
+	for _, coll := range colls {
+		cursor, err := c.DB.Collection(coll).Aggregate(context.TODO(), mongo.Pipeline{bson.D{{
+			Key: "$unset", Value: bson.A{"_id", "lastmodified"},
+		}}})
+		if err != nil {
+			log.Println("asdasd", err)
+			return nil, err
+		}
+		var res []bson.M
+		if err = cursor.All(context.TODO(), &res); err != nil {
+			log.Println("dfgdfg", err)
+			return nil, err
+		}
+
+		for _, v := range res {
+			s := v[sld].(string)
+			for sub, ip := range v {
+				if sub != s {
+					if i, ok := ip.(string); ok {
+						m[reconstruct(coll, s, sub)] = i
+					}
+				}
+			}
+
+		}
+	}
+	r := c.Meta()
+	if r != 0 {
+		m["number of records"] = fmt.Sprint(r)
+	}
+	return m, nil
+}
+
+func (c *Client) handleMulti(mr minidns.MultiRequest) {
+	if mr.ReqType == "sub" {
+		url, err := parser(mr.Requset)
+		if err != nil {
+			mr.Err <- err
+			return
+		}
+		res, err := c.Subdomains(url)
+		if err != nil {
+			mr.Err <- err
+			return
+		}
+		mr.Response <- res
+	} else if mr.ReqType == "all" {
+		fmt.Printf("\"hello\": %v\n", "hello")
+		m, err := c.returnAll()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		mr.Response <- m
+	}
+}
+
+func Manage(mongoURI string, singleReq <-chan minidns.Request, MultiReq <-chan minidns.MultiRequest) {
 	client := NewClient(mongoURI)
 	updateTimer := time.NewTicker(time.Minute * 5)
 	defer updateTimer.Stop()
 
 	for {
 		select {
-		case ch := <-ip:
+		case mr := <-MultiReq:
+			go client.handleMulti(mr)
+		case ch := <-singleReq:
 			go client.assistance(ch)
 		case <-updateTimer.C:
 			client.Update()

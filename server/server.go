@@ -1,64 +1,135 @@
 package server
 
 import (
-	"encoding/json"
-	"fmt"
+	"log"
 	"net/http"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	minidns "github.com/mamad-nik/mini-dns"
 )
 
-type inputJson struct {
-	Url string `json:"url"`
+type req struct {
+	Body string `json:"body"`
 }
 
-type errorJson struct {
-	Response string `json:"response"`
+type res struct {
+	Body string `json:"body"`
 }
 
-func jsoniseErr(returnedErr string, w http.ResponseWriter) {
-	ej := errorJson{
-		Response: returnedErr,
-	}
-	if err := json.NewEncoder(w).Encode(ej); err != nil {
-		return
-	}
-}
+func Serve(reqchan chan minidns.Request, multiChan chan minidns.MultiRequest) {
+	router := gin.Default()
 
-func Serve(reqchan chan minidns.Request) {
-	r := mux.NewRouter()
+	router.LoadHTMLGlob("../../templates/*")
 
-	r.HandleFunc("/dns", func(w http.ResponseWriter, r *http.Request) {
-		var ij inputJson
-		err := json.NewDecoder(r.Body).Decode(&ij)
+	singleHandler := func(ctx *gin.Context, reqtype string) {
+		var r req
 
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			jsoniseErr("not a valid json request", w)
+		if err := ctx.ShouldBindJSON(&r); err != nil {
+			log.Println("error: ", err)
+			return
+		}
+		log.Println("domain: ", r.Body)
+		ipChan := make(chan string)
+		errChan := make(chan error)
+
+		reqchan <- minidns.Request{
+			ReqType:  reqtype,
+			Requset:  r.Body,
+			Response: ipChan,
+			Err:      errChan,
 		}
 
-		req := minidns.Request{
-			Domain: ij.Url,
-			IP:     make(chan string),
-			Err:    make(chan error),
-		}
-		reqchan <- req
 		select {
-		case e := <-req.Err:
-			w.WriteHeader(http.StatusInternalServerError)
-			jsoniseErr(e.Error(), w)
-		case ip := <-req.IP:
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fmt.Sprintf("%s\n", ip)))
-
+		case ip := <-ipChan:
+			ctx.JSON(http.StatusOK, res{
+				Body: ip,
+			})
+		case err := <-errChan:
+			log.Println(err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{})
+			return
 		}
+	}
+
+	multiHandler := func(ctx *gin.Context, reqtype string) {
+		var r req
+
+		if err := ctx.ShouldBindJSON(&r); err != nil {
+			log.Println("error: ", err)
+			return
+		}
+		log.Println("domain: ", r.Body)
+		ipChan := make(chan map[string]string)
+		errChan := make(chan error)
+
+		multiChan <- minidns.MultiRequest{
+			ReqType:  reqtype,
+			Requset:  r.Body,
+			Response: ipChan,
+			Err:      errChan,
+		}
+
+		select {
+		case ip := <-ipChan:
+			ctx.JSON(http.StatusOK, ip)
+		case err := <-errChan:
+			log.Println(err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{})
+			return
+		}
+
+	}
+
+	router.GET("/favicon.ico", func(ctx *gin.Context) {
+		ctx.File("../../images/gsg.webp")
 	})
 
-	server := http.Server{
+	router.GET("/", func(ctx *gin.Context) {
+		ctx.HTML(http.StatusOK, "index.html", gin.H{
+			"new": true,
+		})
+	})
+
+	router.POST("/dns", func(ctx *gin.Context) {
+		singleHandler(ctx, "ip")
+	})
+
+	router.POST("/IP", func(ctx *gin.Context) {
+		singleHandler(ctx, "domain")
+
+	})
+
+	router.POST("/subdomains", func(ctx *gin.Context) {
+		multiHandler(ctx, "sub")
+	})
+
+	router.GET("/all", func(ctx *gin.Context) {
+
+		ipChan := make(chan map[string]string)
+		errChan := make(chan error)
+
+		multiChan <- minidns.MultiRequest{
+			ReqType:  "all",
+			Requset:  "",
+			Response: ipChan,
+			Err:      errChan,
+		}
+
+		select {
+		case ip := <-ipChan:
+			ctx.JSON(http.StatusOK, ip)
+		case err := <-errChan:
+			log.Println(err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{})
+			return
+		}
+
+	})
+
+	s := &http.Server{
 		Addr:    ":3535",
-		Handler: r,
+		Handler: router,
 	}
 
-	server.ListenAndServe()
+	s.ListenAndServe()
 }

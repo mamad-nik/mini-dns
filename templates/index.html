@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      body {
+        margin: 0;
+        border: 0;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+      }
+      .box {
+        padding: 10px;
+        border: 2px solid black;
+        border-radius: 1%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .res {
+        color: green;
+      }
+      .err {
+        color: red;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container" id="main">
+      <div class="box">
+        <label for="domain">Domain:</label>
+        <input type="text" id="domain" placeholder="www.google.com" />
+        <button onclick="queryDomain()">query</button>
+        <div class="res" id="res1"></div>
+      </div>
+      <div class="box">
+        <label for="IP">Domain:</label>
+        <input type="text" id="IP" placeholder="1.1.1.1" />
+        <button onclick="queryIP()">query</button>
+        <div class="res" id="res2"></div>
+    </div>
+
+    <script>
+      function queryDomain() {
+        var domainInput = document.getElementById("domain").value;
+        var jsonData = { body: encodeURIComponent(domainInput) };
+        var url = "/dns";
+
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(jsonData),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error("Network response was not ok");
+            }
+            return response.json();
+          })
+          .then((data) => {
+            console.log("Response from backend:", data);
+            var div = document.getElementById("res1");
+            div.classList.add("res");
+            div.innerHTML = "<p>" + data.body + "</p>";
+          })
+          .catch((error) => {
+            console.error("Error:", error);
+            var div = getElementById("res1");
+            div.classList.add("err");
+          });
+      }
+
+      function queryIP() {
+        var ipInput = document.getElementById("IP").value;
+        var jsonData = { body: encodeURIComponent(ipInput)}
+        var url = "/IP"; 
+
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(jsonData)
+        })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error("Network response was not ok")
+          } 
+          return response.json()
+        })
+        .then((data) => {
+          console.log("Response from backend:", data);
+          var div = document.getElementById("res2");
+          if (data.body === "") {
+            div.classList.add("err")
+            div.innerHTML =  "<p>" + "no data was found" + "</p>";
+            
+          } else {
+          div.classList.add("res")
+          div.innerHTML =  "<p>" + data.body + "</p>";
+          }
+        })
+      }
+    </script>
+  </body>
+</html>

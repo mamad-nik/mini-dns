@@ -1,12 +1,18 @@
 package archive
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
 
-func parser(url string) (s []string) {
-	s = strings.Split(url, ".")
+func parser(url string) ([]string, error) {
+	fmt.Println(url)
+	s := strings.Split(url, ".")
+	if len(s) < 2 {
+		return []string{}, errors.New("invalid url")
+	}
 	sub := len(s) - 2
 
 	str := strings.Join(s[:sub], ".")
@@ -18,12 +24,14 @@ func parser(url string) (s []string) {
 	if s[2] == "" {
 		s[2] = "-val"
 	}
-	return
+	return s, nil
 }
 
 func reconstruct(tld, sld, sub string) string {
 	if sub == "-val" {
 		sub = ""
+	} else {
+		sub += "."
 	}
-	return sub + "." + sld + "." + tld
+	return sub + sld + "." + tld
 }
